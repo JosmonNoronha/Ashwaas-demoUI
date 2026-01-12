@@ -13,15 +13,23 @@ const statusText = document.getElementById('statusText');
 const visualizerBars = document.querySelectorAll('.visualizer-bar');
 const consoleOutput = document.getElementById('consoleOutput');
 const clearConsoleBtn = document.getElementById('clearConsoleBtn');
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
 
 // State
 let isRecording = false;
-let mediaRecorder = null;
 let recordingStartTime = null;
 let timerInterval = null;
 let websocket = null;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 5;
+
+// WAV Recording variables
+let audioContext = null;
+let source = null;
+let processor = null;
+let stream = null;
+let pcmData = [];
 
 // Charts
 let emotionPieChart = null;
@@ -137,12 +145,17 @@ function handleServerResponse(data) {
     // Handle errors
     if (data.error) {
         logToConsole(`✗ Server error: ${data.error}`, 'error');
+        statusDisplay.textContent = 'Error - Click to retry';
         return;
     }
     
     // Handle no speech detected
     if (data.status === 'no_speech') {
-        logToConsole('No speech detected in audio chunk', 'warning');
+        logToConsole('No speech detected in audio', 'warning');
+        statusDisplay.textContent = 'No speech detected';
+        setTimeout(() => {
+            statusDisplay.textContent = 'Click microphone to start';
+        }, 2000);
         return;
     }
     
@@ -166,6 +179,10 @@ function handleServerResponse(data) {
     if (data.emotionData) {
         updateCharts(data.emotionData);
     }
+    
+    // Reset status after successful processing
+    statusDisplay.textContent = 'Click microphone to start';
+    logToConsole('✓ Results displayed successfully', 'success');
 }
 
 // ============================================================================
@@ -235,49 +252,44 @@ micButton.addEventListener('click', async () => {
 
 async function startRecording() {
     try {
-        logToConsole('🎤 Requesting microphone access...', 'info');
-        
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-            audio: {
-                channelCount: 1,
-                sampleRate: { ideal: 16000 },
-                echoCancellation: true,
-                noiseSuppression: false,  // Disable to preserve Konkani speech
-                autoGainControl: true,
-                latency: 0
-            } 
-        });
-        
-        // Log the actual audio track settings
-        const audioTrack = stream.getAudioTracks()[0];
-        const settings = audioTrack.getSettings();
-        logToConsole(`✓ Microphone: ${audioTrack.label}`, 'success');
-        logToConsole(`  Sample Rate: ${settings.sampleRate}Hz, Channels: ${settings.channelCount}`, 'info');
-        
-        // Use WebM format for better compatibility
-        const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
-            ? 'audio/webm;codecs=opus' 
-            : 'audio/webm';
+        // Request microphone access only once
+        if (!stream || !stream.active) {
+            logToConsole('🎤 Requesting microphone access...', 'info');
             
-        mediaRecorder = new MediaRecorder(stream, { mimeType });
+            stream = await navigator.mediaDevices.getUserMedia({ 
+                audio: {
+                    channelCount: 1,
+                    echoCancellation: true,
+                    noiseSuppression: false,
+                    autoGainControl: true
+                } 
+            });
+            
+            // Log the actual audio track settings
+            const audioTrack = stream.getAudioTracks()[0];
+            const settings = audioTrack.getSettings();
+            logToConsole(`✓ Microphone: ${audioTrack.label}`, 'success');
+            logToConsole(`  Sample Rate: ${settings.sampleRate}Hz, Channels: ${settings.channelCount}`, 'info');
+        }
         
-        logToConsole(`✓ Recording format: ${mimeType}`, 'success');
+        // Create AudioContext with 16kHz sample rate (reuse if exists)
+        if (!audioContext || audioContext.state === 'closed') {
+            audioContext = new AudioContext({ sampleRate: 16000 });
+            logToConsole(`✓ Recording format: WAV (16kHz, 16-bit)`, 'success');
+        }
 
-        mediaRecorder.ondataavailable = (event) => {
-            if (event.data.size > 0 && websocket && websocket.readyState === WebSocket.OPEN) {
-                // Send audio chunk to server
-                websocket.send(event.data);
-                logToConsole(`→ Sent audio chunk (${event.data.size} bytes)`, 'info');
-            }
+        source = audioContext.createMediaStreamSource(stream);
+        processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+        source.connect(processor);
+        processor.connect(audioContext.destination);
+
+        pcmData = [];
+
+        processor.onaudioprocess = e => {
+            pcmData.push(new Float32Array(e.inputBuffer.getChannelData(0)));
         };
 
-        mediaRecorder.onerror = (event) => {
-            logToConsole(`✗ MediaRecorder error: ${event.error}`, 'error');
-            stopRecording();
-        };
-
-        // Send data every 2 seconds for better speech capture
-        mediaRecorder.start(2000);
         isRecording = true;
         micButton.classList.add('recording');
         statusDisplay.textContent = 'Recording...';
@@ -295,19 +307,49 @@ async function startRecording() {
 }
 
 function stopRecording() {
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-        mediaRecorder.stop();
-        mediaRecorder.stream.getTracks().forEach(track => track.stop());
+    if (processor) {
+        processor.disconnect();
+        processor = null;
     }
+    if (source) {
+        source.disconnect();
+        source = null;
+    }
+    // Keep stream and audioContext alive for next recording
 
-    logToConsole('⏹ Recording stopped', 'warning');
+    logToConsole('⏹ Recording stopped - Processing audio...', 'warning');
     isRecording = false;
     micButton.classList.remove('recording');
-    statusDisplay.textContent = 'Click microphone to start';
+    statusDisplay.textContent = 'Processing...';
     statusDisplay.classList.remove('recording');
     
     stopTimer();
     stopVisualizer();
+
+    // Convert PCM to WAV and send to server
+    if (pcmData.length > 0) {
+        const wavBlob = pcmToWav(pcmData, 16000);
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const fileName = `recording-${timestamp}.wav`;
+        
+        logToConsole(`✓ Created WAV file: ${fileName} (${wavBlob.size} bytes)`, 'success');
+        
+        // Send to server if connected
+        if (websocket && websocket.readyState === WebSocket.OPEN) {
+            logToConsole(`📤 Sending WAV file to server...`, 'info');
+            websocket.send(wavBlob);
+        } else {
+            showError('Server not connected. Please wait for connection.');
+            logToConsole(`✗ Cannot send file - server disconnected`, 'error');
+            statusDisplay.textContent = 'Click microphone to start';
+        }
+        
+        // Clear PCM data
+        pcmData = [];
+    } else {
+        logToConsole('⚠ No audio recorded', 'warning');
+        statusDisplay.textContent = 'Click microphone to start';
+    }
 }
 
 // ============================================================================
@@ -392,6 +434,56 @@ clearBtn.addEventListener('click', () => {
 });
 
 // ============================================================================
+// WAV ENCODER
+// ============================================================================
+
+function pcmToWav(pcmChunks, sampleRate) {
+    const samples = mergePCM(pcmChunks);
+    const buffer = new ArrayBuffer(44 + samples.length * 2);
+    const view = new DataView(buffer);
+
+    writeString(view, 0, 'RIFF');
+    view.setUint32(4, 36 + samples.length * 2, true);
+    writeString(view, 8, 'WAVE');
+    writeString(view, 12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeString(view, 36, 'data');
+    view.setUint32(40, samples.length * 2, true);
+
+    let offset = 44;
+    for (let i = 0; i < samples.length; i++, offset += 2) {
+        const s = Math.max(-1, Math.min(1, samples[i]));
+        view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    }
+
+    return new Blob([view], { type: 'audio/wav' });
+}
+
+function mergePCM(chunks) {
+    let length = 0;
+    chunks.forEach(c => length += c.length);
+    const result = new Float32Array(length);
+    let offset = 0;
+    chunks.forEach(c => {
+        result.set(c, offset);
+        offset += c.length;
+    });
+    return result;
+}
+
+function writeString(view, offset, str) {
+    for (let i = 0; i < str.length; i++) {
+        view.setUint8(offset + i, str.charCodeAt(i));
+    }
+}
+
+// ============================================================================
 // ERROR HANDLING
 // ============================================================================
 
@@ -405,6 +497,97 @@ function hideError() {
 }
 
 // ============================================================================
+// DRAG AND DROP
+// ============================================================================
+
+function setupDragAndDrop() {
+    // Prevent default drag behaviors
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, preventDefaults, false);
+        document.body.addEventListener(eventName, preventDefaults, false);
+    });
+
+    // Highlight drop zone when item is dragged over it
+    ['dragenter', 'dragover'].forEach(eventName => {
+        dropZone.addEventListener(eventName, () => {
+            dropZone.classList.add('drag-over');
+        }, false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, () => {
+            dropZone.classList.remove('drag-over');
+        }, false);
+    });
+
+    // Handle dropped files
+    dropZone.addEventListener('drop', handleDrop, false);
+    
+    // Handle click to browse
+    dropZone.addEventListener('click', () => {
+        fileInput.click();
+    });
+    
+    fileInput.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) {
+            handleFile(e.target.files[0]);
+        }
+    });
+}
+
+function preventDefaults(e) {
+    e.preventDefault();
+    e.stopPropagation();
+}
+
+function handleDrop(e) {
+    const dt = e.dataTransfer;
+    const files = dt.files;
+
+    if (files.length > 0) {
+        handleFile(files[0]);
+    }
+}
+
+function handleFile(file) {
+    // Check if it's a WAV file
+    if (!file.type.includes('audio/wav') && !file.name.toLowerCase().endsWith('.wav')) {
+        showError('Please upload a WAV audio file');
+        logToConsole('✗ Invalid file type. Only WAV files are supported.', 'error');
+        return;
+    }
+
+    logToConsole(`📁 File selected: ${file.name} (${(file.size / 1024).toFixed(2)} KB)`, 'info');
+    statusDisplay.textContent = 'Processing file...';
+
+    // Read the file and send to server
+    const reader = new FileReader();
+    
+    reader.onload = async (e) => {
+        const arrayBuffer = e.target.result;
+        const blob = new Blob([arrayBuffer], { type: 'audio/wav' });
+        
+        if (websocket && websocket.readyState === WebSocket.OPEN) {
+            logToConsole('📤 Sending file to server...', 'info');
+            websocket.send(blob);
+            statusDisplay.textContent = 'Analyzing audio...';
+        } else {
+            showError('Server not connected. Please wait for connection.');
+            logToConsole('✗ Cannot send file - server disconnected', 'error');
+            statusDisplay.textContent = 'Click microphone to start';
+        }
+    };
+    
+    reader.onerror = () => {
+        showError('Failed to read file');
+        logToConsole('✗ File read error', 'error');
+        statusDisplay.textContent = 'Click microphone to start';
+    };
+    
+    reader.readAsArrayBuffer(file);
+}
+
+// ============================================================================
 // PAGE LIFECYCLE
 // ============================================================================
 
@@ -412,11 +595,19 @@ window.addEventListener('load', () => {
     logToConsole('Application loaded', 'success');
     initializeCharts();
     connectWebSocket();
+    setupDragAndDrop();
 });
 
 window.addEventListener('beforeunload', () => {
     if (isRecording) {
         stopRecording();
+    }
+    // Clean up microphone and audio resources
+    if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+    }
+    if (audioContext) {
+        audioContext.close();
     }
     if (websocket) {
         websocket.close();

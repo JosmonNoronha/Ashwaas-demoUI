@@ -26,6 +26,14 @@
                 <div class="status-text" id="statusDisplay">Click microphone to start</div>
                 <div class="timer" id="timer">00:00</div>
                 
+                <div class="drop-zone" id="dropZone">
+                    <div class="drop-zone-content">
+                        <p>📁 Drag & Drop WAV file here</p>
+                        <p class="drop-zone-subtitle">or click to browse</p>
+                    </div>
+                    <input type="file" id="fileInput" accept=".wav,audio/wav" style="display: none;">
+                </div>
+                
                 <div class="audio-visualizer" id="visualizer">
                     <div class="visualizer-bar" style="height: 20px;"></div>
                     <div class="visualizer-bar" style="height: 40px;"></div>

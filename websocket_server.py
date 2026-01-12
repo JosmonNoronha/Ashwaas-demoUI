@@ -311,8 +311,8 @@ class GlobalPipeline:
                     temperature=0.0,
                     vad_filter=True,
                     vad_parameters=dict(
-                        threshold=0.3,
-                        min_speech_duration_ms=250
+                        threshold=0.2,  # Lower threshold for better detection
+                        min_speech_duration_ms=200  # Shorter minimum duration
                     )
                 )
                 
@@ -370,12 +370,80 @@ def parse_audio_from_blob(audio_data: bytes) -> Optional[np.ndarray]:
                             step = int(sample_rate / 16000)
                             audio_array = audio_array[::step]
                     
+                    print(f"✓ Parsed WAV audio: {len(audio_array)/16000:.2f}s at {sample_rate}Hz")
                     return audio_array
         except:
             pass
         
+        # Try using soundfile (better for WebM/Opus)
+        try:
+            import soundfile as sf
+            with io.BytesIO(audio_data) as audio_io:
+                audio_array, sample_rate = sf.read(audio_io)
+                
+                # Convert to mono if stereo
+                if audio_array.ndim > 1:
+                    audio_array = audio_array.mean(axis=1)
+                
+                # Resample to 16kHz if needed
+                if sample_rate != 16000:
+                    from scipy import signal
+                    audio_array = signal.resample(
+                        audio_array,
+                        int(len(audio_array) * 16000 / sample_rate)
+                    )
+                
+                # Ensure float32 normalized to [-1, 1]
+                audio_array = audio_array.astype(np.float32)
+                if np.abs(audio_array).max() > 1.0:
+                    audio_array = audio_array / 32768.0
+                
+                print(f"✓ Parsed audio with soundfile: {len(audio_array)/16000:.2f}s at {sample_rate}Hz")
+                return audio_array
+        except ImportError:
+            pass
+        except Exception as e:
+            print(f"⚠ soundfile parsing failed: {e}")
+        
+        # Try WebM/MP4/OGG format using pydub/ffmpeg
+        try:
+            from pydub import AudioSegment
+            with io.BytesIO(audio_data) as audio_io:
+                # Try to load as various formats
+                audio = None
+                for fmt in ['webm', 'ogg', 'mp4', 'mp3']:
+                    try:
+                        audio = AudioSegment.from_file(audio_io, format=fmt)
+                        print(f"✓ Loaded as {fmt} format")
+                        break
+                    except:
+                        audio_io.seek(0)
+                        continue
+                
+                if audio is not None:
+                    # Convert to mono 16kHz
+                    audio = audio.set_channels(1).set_frame_rate(16000)
+                    samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
+                    
+                    # Normalize based on sample width
+                    if audio.sample_width == 2:  # 16-bit
+                        samples = samples / 32768.0
+                    elif audio.sample_width == 4:  # 32-bit
+                        samples = samples / 2147483648.0
+                    else:  # 8-bit
+                        samples = (samples - 128) / 128.0
+                    
+                    print(f"✓ Parsed WebM/media audio: {len(samples)/16000:.2f}s")
+                    return samples
+                else:
+                    print("⚠ pydub could not parse audio (ffmpeg might be missing)")
+        except ImportError:
+            print("⚠ pydub not installed - WebM format not supported")
+        except Exception as e:
+            print(f"⚠ WebM parsing failed: {e}")
+        
         # Fallback: Raw 16-bit PCM
-        # IMPORTANT: Don't truncate odd bytes - pad instead
+        print("⚠ Falling back to raw PCM parsing - this may not work for WebM")
         if len(audio_data) % 2 != 0:
             audio_data = audio_data + b'\x00'
         
@@ -383,6 +451,7 @@ def parse_audio_from_blob(audio_data: bytes) -> Optional[np.ndarray]:
             return None
             
         audio_array = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
+        print(f"⚠ Using raw PCM fallback: {len(audio_array)/16000:.2f}s")
         return audio_array
         
     except Exception as e:
@@ -463,7 +532,24 @@ async def websocket_endpoint(websocket: WebSocket):
                 if audio_array is None or len(audio_array) == 0:
                     continue
                 
-                # Update speech detection state FIRST
+                # Check if this is a complete recording/file (> 0.5 seconds) - process immediately
+                # Small streaming chunks are typically < 200ms, so anything > 0.5s is a complete recording
+                audio_duration = len(audio_array) / pipeline.config.sample_rate
+                
+                if audio_duration > 0.5:
+                    # This is a complete file/recording - process immediately
+                    print(f"🎵 Complete audio detected ({audio_duration:.1f}s) - processing immediately...")
+                    loop = asyncio.get_running_loop()
+                    result = await loop.run_in_executor(None, process_audio, audio_array)
+                    await websocket.send_json(result)
+                    
+                    # Clear any buffered data
+                    audio_buffer.clear()
+                    audio_buffer.speech_detected = False
+                    audio_buffer.silence_samples = 0
+                    continue
+                
+                # For smaller chunks (live recording), use buffering logic
                 has_speech = audio_buffer.has_speech(audio_array)
                 
                 if has_speech:
