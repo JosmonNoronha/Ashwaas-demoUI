@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Konkani Live Speech Recognition</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎤 Konkani Live Speech Recognition</h1>
+            <p class="subtitle">Real-time speech-to-text with emotion analysis</p>
+            <div class="connection-status">
+                <div class="status-indicator" id="statusIndicator"></div>
+                <span id="statusText">Connecting to server...</span>
+            </div>
+        </div>
+
+        <div class="error-message" id="errorMessage"></div>
+
+        <div class="main-content">
+            <div class="card recording-section">
+                <h2>🎙️ Recording</h2>
+                <button class="mic-button" id="micButton" disabled>🎤</button>
+                <div class="status-text" id="statusDisplay">Click microphone to start</div>
+                <div class="timer" id="timer">00:00</div>
+                
+                <div class="audio-visualizer" id="visualizer">
+                    <div class="visualizer-bar" style="height: 20px;"></div>
+                    <div class="visualizer-bar" style="height: 40px;"></div>
+                    <div class="visualizer-bar" style="height: 30px;"></div>
+                    <div class="visualizer-bar" style="height: 50px;"></div>
+                    <div class="visualizer-bar" style="height: 35px;"></div>
+                    <div class="visualizer-bar" style="height: 45px;"></div>
+                    <div class="visualizer-bar" style="height: 25px;"></div>
+                    <div class="visualizer-bar" style="height: 55px;"></div>
+                    <div class="visualizer-bar" style="height: 30px;"></div>
+                    <div class="visualizer-bar" style="height: 40px;"></div>
+                    <div class="visualizer-bar" style="height: 35px;"></div>
+                    <div class="visualizer-bar" style="height: 45px;"></div>
+                    <div class="visualizer-bar" style="height: 50px;"></div>
+                    <div class="visualizer-bar" style="height: 30px;"></div>
+                    <div class="visualizer-bar" style="height: 40px;"></div>
+                </div>
+
+                <div class="controls">
+                    <button class="control-btn clear-btn" id="clearBtn">Clear All</button>
+                </div>
+            </div>
+
+            <div class="card transcription-section">
+                <h2>📝 Transcription & Translation</h2>
+                
+                <div class="text-output">
+                    <h3>Konkani</h3>
+                    <p id="konkaniText">Your speech will appear here...</p>
+                </div>
+
+                <div class="text-output">
+                    <h3>English Translation</h3>
+                    <p id="englishText">Translation will appear here...</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="card emotion-section">
+            <div class="emotion-header">
+                <h2>😊 Emotion Analysis</h2>
+                <div class="current-emotion">
+                    <span class="emotion-badge emotion-default" id="emotionBadge">Waiting...</span>
+                    <span class="emotion-confidence" id="emotionConfidence"></span>
+                </div>
+            </div>
+
+            <div class="charts-container">
+                //Emotion Data Charts
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
