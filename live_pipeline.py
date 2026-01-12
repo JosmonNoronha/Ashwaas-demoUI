@@ -199,7 +199,7 @@ class GeminiKonkaniCorrector:
         
         # Get API key from parameter or environment
         if not api_key:
-            api_key = "AIzaSyDVGC9YnhS28_GuxmlRa37s1_TAFDWJF7c"
+            api_key = ""
         
         if not api_key:
             print("⚠ Gemini API key not found. Set GEMINI_API_KEY environment variable.")
