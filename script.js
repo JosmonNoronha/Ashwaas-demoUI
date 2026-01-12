@@ -11,14 +11,17 @@ const errorMessage = document.getElementById('errorMessage');
 const statusIndicator = document.getElementById('statusIndicator');
 const statusText = document.getElementById('statusText');
 const visualizerBars = document.querySelectorAll('.visualizer-bar');
+const consoleOutput = document.getElementById('consoleOutput');
+const clearConsoleBtn = document.getElementById('clearConsoleBtn');
 
 // State
 let isRecording = false;
 let mediaRecorder = null;
-let audioChunks = [];
 let recordingStartTime = null;
 let timerInterval = null;
 let websocket = null;
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 5;
 
 // Charts
 let emotionPieChart = null;
@@ -26,156 +29,132 @@ let emotionTimeChart = null;
 let confidenceChart = null;
 let intensityChart = null;
 
-// Initialize Charts
+// ============================================================================
+// INITIALIZATION
+// ============================================================================
+
+// Initialize Charts (DISABLED - performance optimization)
 function initializeCharts() {
-    const pieCtx = document.getElementById('emotionPieChart').getContext('2d');
-    emotionPieChart = new Chart(pieCtx, {
-        type: 'doughnut',
-        data: {
-            labels: ['Happy', 'Sad', 'Angry', 'Neutral', 'Fear', 'Surprise'],
-            datasets: [{
-                data: [0, 0, 0, 0, 0, 0],
-                backgroundColor: [
-                    '#d4edda',
-                    '#f8d7da',
-                    '#f5c6cb',
-                    '#d1ecf1',
-                    '#fff3cd',
-                    '#cfe2ff'
-                ]
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    position: 'bottom'
-                }
-            }
-        }
-    });
-
-    const timeCtx = document.getElementById('emotionTimeChart').getContext('2d');
-    emotionTimeChart = new Chart(timeCtx, {
-        type: 'line',
-        data: {
-            labels: [],
-            datasets: [{
-                label: 'Emotion Score',
-                data: [],
-                borderColor: '#667eea',
-                backgroundColor: 'rgba(102, 126, 234, 0.1)',
-                tension: 0.4
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-                y: {
-                    beginAtZero: true,
-                    max: 1
-                }
-            }
-        }
-    });
-
-    const confidenceCtx = document.getElementById('confidenceChart').getContext('2d');
-    confidenceChart = new Chart(confidenceCtx, {
-        type: 'bar',
-        data: {
-            labels: ['Happy', 'Sad', 'Angry', 'Neutral', 'Fear', 'Surprise'],
-            datasets: [{
-                label: 'Confidence %',
-                data: [0, 0, 0, 0, 0, 0],
-                backgroundColor: '#667eea'
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-                y: {
-                    beginAtZero: true,
-                    max: 100
-                }
-            }
-        }
-    });
-
-    const intensityCtx = document.getElementById('intensityChart').getContext('2d');
-    intensityChart = new Chart(intensityCtx, {
-        type: 'radar',
-        data: {
-            labels: ['Happy', 'Sad', 'Angry', 'Neutral', 'Fear', 'Surprise'],
-            datasets: [{
-                label: 'Intensity',
-                data: [0, 0, 0, 0, 0, 0],
-                backgroundColor: 'rgba(102, 126, 234, 0.2)',
-                borderColor: '#667eea',
-                pointBackgroundColor: '#667eea'
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-                r: {
-                    beginAtZero: true,
-                    max: 1
-                }
-            }
-        }
-    });
+    // Charts disabled to reduce frontend load
+    console.log('Charts disabled for performance');
+    return;
 }
 
-// Connect to WebSocket
+// ============================================================================
+// CONSOLE LOGGING
+// ============================================================================
+
+function logToConsole(message, type = 'info') {
+    const timestamp = new Date().toLocaleTimeString();
+    const line = document.createElement('div');
+    line.className = `console-line ${type}`;
+    line.innerHTML = `<span class="timestamp">[${timestamp}]</span> ${message}`;
+    consoleOutput.appendChild(line);
+    consoleOutput.scrollTop = consoleOutput.scrollHeight;
+}
+
+function clearConsole() {
+    consoleOutput.innerHTML = '<div class="console-line">Console cleared.</div>';
+}
+
+// ============================================================================
+// WEBSOCKET CONNECTION
+// ============================================================================
+
 function connectWebSocket() {
-    // TODO: Replace with your actual WebSocket endpoint
+    // Always connect to localhost:8000 for the WebSocket server
     const wsUrl = 'ws://localhost:8000/ws';
+    
+    logToConsole('Connecting to server...', 'info');
+    statusText.textContent = 'Connecting...';
     
     try {
         websocket = new WebSocket(wsUrl);
 
         websocket.onopen = () => {
             statusIndicator.classList.remove('disconnected');
+            statusIndicator.classList.add('connected');
             statusText.textContent = 'Connected';
             micButton.disabled = false;
             hideError();
+            reconnectAttempts = 0;
+            logToConsole('✓ Connected to WebSocket server', 'success');
         };
 
         websocket.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            handleServerResponse(data);
+            try {
+                const data = JSON.parse(event.data);
+                handleServerResponse(data);
+                logToConsole('✓ Received response from server', 'success');
+            } catch (error) {
+                logToConsole(`✗ Error parsing message: ${error.message}`, 'error');
+            }
         };
 
         websocket.onerror = (error) => {
             showError('WebSocket error. Please check backend connection.');
             console.error('WebSocket error:', error);
+            logToConsole('✗ WebSocket error occurred', 'error');
         };
 
         websocket.onclose = () => {
+            statusIndicator.classList.remove('connected');
             statusIndicator.classList.add('disconnected');
             statusText.textContent = 'Disconnected';
             micButton.disabled = true;
-            showError('Connection lost. Please refresh the page.');
+            
+            // Stop recording if active
+            if (isRecording) {
+                stopRecording();
+            }
+            
+            logToConsole('✗ Connection closed', 'error');
+            
+            // Attempt reconnection
+            if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                reconnectAttempts++;
+                const delay = Math.min(1000 * reconnectAttempts, 5000);
+                logToConsole(`Reconnecting in ${delay/1000}s (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`, 'warning');
+                setTimeout(connectWebSocket, delay);
+            } else {
+                showError('Connection lost. Please refresh the page.');
+            }
         };
     } catch (error) {
         showError('Failed to connect to server');
         console.error('Connection error:', error);
+        logToConsole(`✗ Connection failed: ${error.message}`, 'error');
     }
 }
 
-// Handle server response
+// ============================================================================
+// SERVER RESPONSE HANDLER
+// ============================================================================
+
 function handleServerResponse(data) {
+    console.log('handleServerResponse called with:', data);
+    
+    // Handle errors
+    if (data.error) {
+        logToConsole(`✗ Server error: ${data.error}`, 'error');
+        return;
+    }
+    
+    // Handle no speech detected
+    if (data.status === 'no_speech') {
+        logToConsole('No speech detected in audio chunk', 'warning');
+        return;
+    }
+    
     // Update transcription
     if (data.konkani) {
         konkaniText.textContent = data.konkani;
+        logToConsole(`Konkani: ${data.konkani}`, 'success');
     }
 
     if (data.english) {
         englishText.textContent = data.english;
+        logToConsole(`English: ${data.english}`, 'success');
     }
 
     // Update emotion
@@ -189,7 +168,10 @@ function handleServerResponse(data) {
     }
 }
 
-// Update emotion display
+// ============================================================================
+// EMOTION DISPLAY
+// ============================================================================
+
 function updateEmotion(emotionData) {
     const emotion = emotionData.label || 'neutral';
     const confidence = emotionData.confidence || 0;
@@ -197,9 +179,14 @@ function updateEmotion(emotionData) {
     emotionBadge.textContent = emotion.charAt(0).toUpperCase() + emotion.slice(1);
     emotionBadge.className = 'emotion-badge emotion-' + emotion.toLowerCase();
     emotionConfidence.textContent = `${(confidence * 100).toFixed(1)}% confident`;
+    
+    logToConsole(`Emotion: ${emotion} (${(confidence * 100).toFixed(1)}%)`, 'info');
 }
 
-// Update all charts
+// ============================================================================
+// CHARTS UPDATE
+// ============================================================================
+
 function updateCharts(emotionData) {
     // Update pie chart (distribution)
     if (emotionData.distribution) {
@@ -208,8 +195,9 @@ function updateCharts(emotionData) {
     }
 
     // Update time series
-    if (emotionData.timestamp && emotionData.score !== undefined) {
-        emotionTimeChart.data.labels.push(emotionData.timestamp);
+    if (emotionData.score !== undefined) {
+        const timestamp = new Date().toLocaleTimeString();
+        emotionTimeChart.data.labels.push(timestamp);
         emotionTimeChart.data.datasets[0].data.push(emotionData.score);
         
         // Keep only last 20 points
@@ -233,7 +221,10 @@ function updateCharts(emotionData) {
     }
 }
 
-// Start/Stop Recording
+// ============================================================================
+// RECORDING CONTROLS
+// ============================================================================
+
 micButton.addEventListener('click', async () => {
     if (!isRecording) {
         await startRecording();
@@ -244,20 +235,49 @@ micButton.addEventListener('click', async () => {
 
 async function startRecording() {
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        mediaRecorder = new MediaRecorder(stream);
-        audioChunks = [];
+        logToConsole('🎤 Requesting microphone access...', 'info');
+        
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+            audio: {
+                channelCount: 1,
+                sampleRate: { ideal: 16000 },
+                echoCancellation: true,
+                noiseSuppression: false,  // Disable to preserve Konkani speech
+                autoGainControl: true,
+                latency: 0
+            } 
+        });
+        
+        // Log the actual audio track settings
+        const audioTrack = stream.getAudioTracks()[0];
+        const settings = audioTrack.getSettings();
+        logToConsole(`✓ Microphone: ${audioTrack.label}`, 'success');
+        logToConsole(`  Sample Rate: ${settings.sampleRate}Hz, Channels: ${settings.channelCount}`, 'info');
+        
+        // Use WebM format for better compatibility
+        const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
+            ? 'audio/webm;codecs=opus' 
+            : 'audio/webm';
+            
+        mediaRecorder = new MediaRecorder(stream, { mimeType });
+        
+        logToConsole(`✓ Recording format: ${mimeType}`, 'success');
 
         mediaRecorder.ondataavailable = (event) => {
-            audioChunks.push(event.data);
-            
-            // Send audio chunk to server via WebSocket
-            if (websocket && websocket.readyState === WebSocket.OPEN) {
+            if (event.data.size > 0 && websocket && websocket.readyState === WebSocket.OPEN) {
+                // Send audio chunk to server
                 websocket.send(event.data);
+                logToConsole(`→ Sent audio chunk (${event.data.size} bytes)`, 'info');
             }
         };
 
-        mediaRecorder.start(100); // Send data every 100ms
+        mediaRecorder.onerror = (event) => {
+            logToConsole(`✗ MediaRecorder error: ${event.error}`, 'error');
+            stopRecording();
+        };
+
+        // Send data every 2 seconds for better speech capture
+        mediaRecorder.start(2000);
         isRecording = true;
         micButton.classList.add('recording');
         statusDisplay.textContent = 'Recording...';
@@ -270,6 +290,7 @@ async function startRecording() {
     } catch (error) {
         showError('Microphone access denied. Please allow microphone permissions.');
         console.error('Error accessing microphone:', error);
+        logToConsole(`✗ Microphone error: ${error.message}`, 'error');
     }
 }
 
@@ -279,6 +300,7 @@ function stopRecording() {
         mediaRecorder.stream.getTracks().forEach(track => track.stop());
     }
 
+    logToConsole('⏹ Recording stopped', 'warning');
     isRecording = false;
     micButton.classList.remove('recording');
     statusDisplay.textContent = 'Click microphone to start';
@@ -288,7 +310,10 @@ function stopRecording() {
     stopVisualizer();
 }
 
-// Timer functions
+// ============================================================================
+// TIMER
+// ============================================================================
+
 function startTimer() {
     timerInterval = setInterval(() => {
         const elapsed = Date.now() - recordingStartTime;
@@ -305,7 +330,10 @@ function stopTimer() {
     }
 }
 
-// Visualizer animation
+// ============================================================================
+// VISUALIZER
+// ============================================================================
+
 function animateVisualizer() {
     if (!isRecording) return;
 
@@ -323,8 +351,16 @@ function stopVisualizer() {
     });
 }
 
-// Clear all data
+// ============================================================================
+// CLEAR FUNCTIONS
+// ============================================================================
+
+clearConsoleBtn.addEventListener('click', () => {
+    clearConsole();
+});
+
 clearBtn.addEventListener('click', () => {
+    logToConsole('🗑️ Clearing all data...', 'warning');
     konkaniText.textContent = 'Your speech will appear here...';
     englishText.textContent = 'Translation will appear here...';
     emotionBadge.textContent = 'Waiting...';
@@ -333,21 +369,32 @@ clearBtn.addEventListener('click', () => {
     timer.textContent = '00:00';
     
     // Reset charts
-    emotionPieChart.data.datasets[0].data = [0, 0, 0, 0, 0, 0];
-    emotionPieChart.update();
+    if (emotionPieChart) {
+        emotionPieChart.data.datasets[0].data = [0, 0, 0, 0, 0, 0];
+        emotionPieChart.update();
+    }
     
-    emotionTimeChart.data.labels = [];
-    emotionTimeChart.data.datasets[0].data = [];
-    emotionTimeChart.update();
+    if (emotionTimeChart) {
+        emotionTimeChart.data.labels = [];
+        emotionTimeChart.data.datasets[0].data = [];
+        emotionTimeChart.update();
+    }
     
-    confidenceChart.data.datasets[0].data = [0, 0, 0, 0, 0, 0];
-    confidenceChart.update();
+    if (confidenceChart) {
+        confidenceChart.data.datasets[0].data = [0, 0, 0, 0, 0, 0];
+        confidenceChart.update();
+    }
     
-    intensityChart.data.datasets[0].data = [0, 0, 0, 0, 0, 0];
-    intensityChart.update();
+    if (intensityChart) {
+        intensityChart.data.datasets[0].data = [0, 0, 0, 0, 0, 0];
+        intensityChart.update();
+    }
 });
 
-// Error handling
+// ============================================================================
+// ERROR HANDLING
+// ============================================================================
+
 function showError(message) {
     errorMessage.textContent = message;
     errorMessage.style.display = 'block';
@@ -357,13 +404,16 @@ function hideError() {
     errorMessage.style.display = 'none';
 }
 
-// Initialize on page load
+// ============================================================================
+// PAGE LIFECYCLE
+// ============================================================================
+
 window.addEventListener('load', () => {
+    logToConsole('Application loaded', 'success');
     initializeCharts();
     connectWebSocket();
 });
 
-// Cleanup on page unload
 window.addEventListener('beforeunload', () => {
     if (isRecording) {
         stopRecording();
@@ -372,53 +422,3 @@ window.addEventListener('beforeunload', () => {
         websocket.close();
     }
 });
-
-// ============================================================
-// MOCK MODE FOR TESTING WITHOUT BACKEND
-// Uncomment the section below to test with mock data
-// Comment out the connectWebSocket() call above
-// ============================================================
-
-/*
-function mockWebSocket() {
-    statusIndicator.classList.remove('disconnected');
-    statusText.textContent = 'Connected (Mock Mode)';
-    micButton.disabled = false;
-
-    // Simulate receiving data every 2 seconds during recording
-    setInterval(() => {
-        if (!isRecording) return;
-
-        const emotions = ["happy", "neutral", "sad", "angry", "fear", "surprise"];
-        const randomEmotion = emotions[Math.floor(Math.random() * emotions.length)];
-
-        const mockData = {
-            konkani: "हाँव बरें आसा",
-            english: "I am fine",
-            emotion: {
-                label: randomEmotion,
-                confidence: 0.7 + Math.random() * 0.3
-            },
-            emotionData: {
-                distribution: [30, 15, 10, 35, 5, 5],
-                timestamp: timer.textContent,
-                score: Math.random(),
-                confidences: [0.3, 0.15, 0.1, 0.35, 0.05, 0.05],
-                intensities: [
-                    Math.random(),
-                    Math.random(),
-                    Math.random(),
-                    Math.random(),
-                    Math.random(),
-                    Math.random()
-                ]
-            }
-        };
-
-        handleServerResponse(mockData);
-    }, 2000);
-}
-
-// Replace connectWebSocket() in window.addEventListener('load') with:
-// mockWebSocket();
-*/

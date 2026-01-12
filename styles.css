@@ -300,6 +300,100 @@ canvas {
     background: #dc3545;
 }
 
+/* Console Section */
+.console-section {
+    margin-top: 2rem;
+    background: #1e1e1e;
+    border: 1px solid #333;
+}
+
+.console-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid #333;
+}
+
+.console-header h2 {
+    color: #fff;
+    margin: 0;
+}
+
+.clear-console-btn {
+    background: #333;
+    color: #fff;
+    border: 1px solid #555;
+    padding: 0.4rem 1rem;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: all 0.3s ease;
+}
+
+.clear-console-btn:hover {
+    background: #444;
+    border-color: #666;
+}
+
+.console-output {
+    background: #0d0d0d;
+    border: 1px solid #333;
+    border-radius: 4px;
+    padding: 1rem;
+    max-height: 300px;
+    overflow-y: auto;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+
+.console-line {
+    color: #d4d4d4;
+    margin-bottom: 0.3rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.console-line.success {
+    color: #4ec9b0;
+}
+
+.console-line.error {
+    color: #f48771;
+}
+
+.console-line.warning {
+    color: #dcdcaa;
+}
+
+.console-line.info {
+    color: #569cd6;
+}
+
+.console-line .timestamp {
+    color: #858585;
+    margin-right: 0.5rem;
+}
+
+.console-output::-webkit-scrollbar {
+    width: 8px;
+}
+
+.console-output::-webkit-scrollbar-track {
+    background: #1e1e1e;
+}
+
+.console-output::-webkit-scrollbar-thumb {
+    background: #555;
+    border-radius: 4px;
+}
+
+.console-output::-webkit-scrollbar-thumb:hover {
+    background: #666;
+}
+
 @media (max-width: 1024px) {
     .main-content {
         grid-template-columns: 1fr;

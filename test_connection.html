@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Connection Test</title>
+    <style>
+        body {
+            font-family: 'Courier New', monospace;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #1e1e1e;
+            color: #d4d4d4;
+        }
+        h1 {
+            color: #4ec9b0;
+        }
+        .status {
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            font-size: 18px;
+            font-weight: bold;
+        }
+        .connecting {
+            background: #3b3b00;
+            color: #dcdcaa;
+            border: 2px solid #dcdcaa;
+        }
+        .connected {
+            background: #003b00;
+            color: #4ec9b0;
+            border: 2px solid #4ec9b0;
+        }
+        .error {
+            background: #3b0000;
+            color: #f48771;
+            border: 2px solid #f48771;
+        }
+        .log {
+            background: #0d0d0d;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 4px;
+            border: 1px solid #333;
+            max-height: 400px;
+            overflow-y: auto;
+            font-size: 14px;
+        }
+        .log-line {
+            margin: 5px 0;
+            padding: 3px 0;
+        }
+        .success { color: #4ec9b0; }
+        .error-log { color: #f48771; }
+        .info { color: #569cd6; }
+        .warning { color: #dcdcaa; }
+        button {
+            background: #0e639c;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #1177bb;
+        }
+        .timestamp {
+            color: #858585;
+            margin-right: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔌 WebSocket Connection Test</h1>
+    
+    <div class="status connecting" id="status">
+        ⏳ Connecting to ws://localhost:8000/ws...
+    </div>
+
+    <div>
+        <button onclick="testConnection()">🔄 Retry Connection</button>
+        <button onclick="sendTestMessage()">📤 Send Test Audio</button>
+        <button id="micBtn" onclick="toggleRecording()">🎤 Start Recording</button>
+        <button onclick="clearLog()">🗑️ Clear Log</button>
+    </div>
+
+    <div class="log" style="background: #003b00; border-color: #4ec9b0; margin-top: 20px;">
+        <div style="color: #4ec9b0; font-weight: bold; margin-bottom: 10px;">📝 Transcripts:</div>
+        <div id="transcriptArea" style="color: #d4d4d4;">
+            <div style="margin: 5px 0;"><strong>Konkani:</strong> <span id="konkaniOutput">Waiting...</span></div>
+            <div style="margin: 5px 0;"><strong>English:</strong> <span id="englishOutput">Waiting...</span></div>
+            <div style="margin: 5px 0;"><strong>Emotion:</strong> <span id="emotionOutput">Waiting...</span></div>
+        </div>
+    </div>
+
+    <h2>📋 Connection Log:</h2>
+    <div class="log" id="log">
+        <div class="log-line info">Initializing test...</div>
+    </div>
+
+    <script>
+        let ws = null;
+        const statusDiv = document.getElementById('status');
+        const logDiv = document.getElementById('log');
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let isRecording = false;
+
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const line = document.createElement('div');
+            line.className = `log-line ${type}`;
+            line.innerHTML = `<span class="timestamp">[${timestamp}]</span>${message}`;
+            logDiv.appendChild(line);
+            logDiv.scrollTop = logDiv.scrollHeight;
+            console.log(message);
+        }
+
+        function clearLog() {
+            logDiv.innerHTML = '<div class="log-line info">Log cleared.</div>';
+        }
+
+        function updateStatus(message, className) {
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${className}`;
+        }
+
+        async function toggleRecording() {
+            const micBtn = document.getElementById('micBtn');
+            
+            if (!isRecording) {
+                // Start recording
+                try {
+                    log('🎤 Requesting microphone access...', 'info');
+                    const stream = await navigator.mediaDevices.getUserMedia({ 
+                        audio: {
+                            channelCount: 1,
+                            sampleRate: 16000,
+                            echoCancellation: true,
+                            noiseSuppression: true
+                        } 
+                    });
+                    
+                    log('✓ Microphone access granted', 'success');
+                    
+                    mediaRecorder = new MediaRecorder(stream, {
+                        mimeType: 'audio/webm;codecs=opus'
+                    });
+                    audioChunks = [];
+
+                    mediaRecorder.ondataavailable = (event) => {
+                        if (event.data.size > 0) {
+                            audioChunks.push(event.data);
+                            
+                            // Send audio chunk to server
+                            if (ws && ws.readyState === WebSocket.OPEN) {
+                                ws.send(event.data);
+                                log('📤 Sent audio chunk (' + event.data.size + ' bytes)', 'info');
+                            }
+                        }
+                    };
+
+                    mediaRecorder.onstop = () => {
+                        log('⏹️ Recording stopped', 'warning');
+                        stream.getTracks().forEach(track => track.stop());
+                    };
+
+                    mediaRecorder.start(1000); // Send data every 1 second
+                    isRecording = true;
+                    micBtn.textContent = '⏹️ Stop Recording';
+                    micBtn.style.background = '#dc3545';
+                    log('🔴 Recording started...', 'success');
+                    
+                } catch (error) {
+                    log('❌ Microphone error: ' + error.message, 'error-log');
+                }
+            } else {
+                // Stop recording
+                if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                    mediaRecorder.stop();
+                }
+                isRecording = false;
+                micBtn.textContent = '🎤 Start Recording';
+                micBtn.style.background = '#0e639c';
+                log('⏹️ Recording stopped', 'warning');
+            }
+        }
+
+        function testConnection() {
+            log('🔄 Starting connection test...', 'info');
+            
+            if (ws) {
+                log('⚠️ Closing existing connection...', 'warning');
+                ws.close();
+            }
+
+            const wsUrl = 'ws://localhost:8000/ws';
+            updateStatus('⏳ Connecting to ' + wsUrl + '...', 'connecting');
+            
+            try {
+                ws = new WebSocket(wsUrl);
+                log('✓ WebSocket object created', 'success');
+
+                ws.onopen = () => {
+                    updateStatus('✅ CONNECTED to ws://localhost:8000/ws', 'connected');
+                    log('✓ WebSocket connection opened successfully!', 'success');
+                    log('✓ ReadyState: ' + ws.readyState + ' (1 = OPEN)', 'success');
+                };
+
+                ws.onmessage = (event) => {
+                    log('📨 Received message from server:', 'success');
+                    try {
+                        const data = JSON.parse(event.data);
+                        
+                        // Update transcript display
+                        if (data.konkani) {
+                            document.getElementById('konkaniOutput').textContent = data.konkani;
+                            log('└─ Konkani: ' + data.konkani, 'info');
+                        }
+                        if (data.english) {
+                            document.getElementById('englishOutput').textContent = data.english;
+                            log('└─ English: ' + data.english, 'info');
+                        }
+                        if (data.emotion) {
+                            const emotionText = data.emotion.label + ' (' + (data.emotion.confidence * 100).toFixed(1) + '%)';
+                            document.getElementById('emotionOutput').textContent = emotionText;
+                            log('└─ Emotion: ' + emotionText, 'info');
+                        }
+                    } catch (e) {
+                        log('└─ Raw: ' + event.data, 'info');
+                    }
+                };
+
+                ws.onerror = (error) => {
+                    updateStatus('❌ CONNECTION ERROR', 'error');
+                    log('❌ WebSocket error occurred!', 'error-log');
+                    log('└─ Error object: ' + JSON.stringify(error), 'error-log');
+                    log('└─ Check if server is running on port 8000', 'warning');
+                };
+
+                ws.onclose = (event) => {
+                    updateStatus('🔴 DISCONNECTED', 'error');
+                    log('🔴 WebSocket connection closed', 'warning');
+                    log('└─ Code: ' + event.code, 'info');
+                    log('└─ Reason: ' + (event.reason || 'No reason provided'), 'info');
+                    log('└─ Clean close: ' + event.wasClean, 'info');
+                };
+
+            } catch (error) {
+                updateStatus('❌ FAILED TO CREATE CONNECTION', 'error');
+                log('❌ Exception thrown: ' + error.message, 'error-log');
+                log('└─ Stack: ' + error.stack, 'error-log');
+            }
+        }
+
+        function sendTestMessage() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log('❌ Cannot send: WebSocket not connected', 'error-log');
+                log('└─ Current state: ' + (ws ? ws.readyState : 'null'), 'warning');
+                return;
+            }
+
+            log('📤 Sending test audio data...', 'info');
+            
+            // Create fake audio data (1000 bytes)
+            const fakeAudio = new Uint8Array(1000);
+            for (let i = 0; i < 1000; i++) {
+                fakeAudio[i] = Math.floor(Math.random() * 256);
+            }
+
+            try {
+                ws.send(fakeAudio.buffer);
+                log('✓ Test audio data sent (1000 bytes)', 'success');
+                log('└─ Waiting for server response...', 'info');
+            } catch (error) {
+                log('❌ Failed to send: ' + error.message, 'error-log');
+            }
+        }
+
+        // Auto-start test on load
+        window.onload = () => {
+            log('🚀 Page loaded, starting connection test...', 'info');
+            setTimeout(testConnection, 500);
+        };
+    </script>
+</body>
+</html>
