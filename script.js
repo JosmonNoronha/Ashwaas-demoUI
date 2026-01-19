@@ -189,15 +189,48 @@ function handleServerResponse(data) {
 // EMOTION DISPLAY
 // ============================================================================
 
-function updateEmotion(emotionData) {
-    const emotion = emotionData.label || 'neutral';
-    const confidence = emotionData.confidence || 0;
-
-    emotionBadge.textContent = emotion.charAt(0).toUpperCase() + emotion.slice(1);
-    emotionBadge.className = 'emotion-badge emotion-' + emotion.toLowerCase();
-    emotionConfidence.textContent = `${(confidence * 100).toFixed(1)}% confident`;
+function updateEmotion(emotionScores) {
+    console.log('Updating emotion display with:', emotionScores);
     
-    logToConsole(`Emotion: ${emotion} (${(confidence * 100).toFixed(1)}%)`, 'info');
+    // emotionScores is a dict like: {neutral: 25.0, happy: 50.0, sad: 15.0, angry: 10.0}
+    
+    // Find dominant emotion
+    let dominantEmotion = 'neutral';
+    let maxScore = 0;
+    
+    for (const [emotion, score] of Object.entries(emotionScores)) {
+        if (score > maxScore) {
+            maxScore = score;
+            dominantEmotion = emotion;
+        }
+    }
+    
+    // Update badge
+    emotionBadge.textContent = dominantEmotion.charAt(0).toUpperCase() + dominantEmotion.slice(1);
+    emotionBadge.className = 'emotion-badge emotion-' + dominantEmotion.toLowerCase();
+    emotionConfidence.textContent = `${maxScore.toFixed(1)}% confidence`;
+    
+    // Update emotion bars
+    updateEmotionBars(emotionScores);
+    
+    logToConsole(`Emotion: ${dominantEmotion} (${maxScore.toFixed(1)}%)`, 'info');
+}
+
+function updateEmotionBars(scores) {
+    // Update each emotion bar
+    const emotions = ['happy', 'sad', 'angry', 'neutral'];
+    
+    emotions.forEach(emotion => {
+        const score = scores[emotion] || 0;
+        const barElement = document.getElementById(`${emotion}Bar`);
+        const valueElement = document.getElementById(`${emotion}Value`);
+        
+        if (barElement && valueElement) {
+            // Animate the bar
+            barElement.style.width = `${score}%`;
+            valueElement.textContent = `${score.toFixed(1)}%`;
+        }
+    });
 }
 
 // ============================================================================

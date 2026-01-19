@@ -244,6 +244,74 @@ h1 {
     color: #666;
 }
 
+/* Emotion Bars */
+.emotion-bars {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    margin-top: 20px;
+}
+
+.emotion-bar-item {
+    width: 100%;
+}
+
+.emotion-bar-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.emotion-label {
+    font-size: 1em;
+    font-weight: 600;
+    color: #333;
+}
+
+.emotion-value {
+    font-size: 0.95em;
+    font-weight: 600;
+    color: #666;
+}
+
+.emotion-bar-track {
+    width: 100%;
+    height: 30px;
+    background: #f0f0f0;
+    border-radius: 15px;
+    overflow: hidden;
+    position: relative;
+}
+
+.emotion-bar-fill {
+    height: 100%;
+    border-radius: 15px;
+    transition: width 0.5s ease;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding-right: 10px;
+    color: white;
+    font-weight: 600;
+}
+
+.emotion-bar-fill.emotion-happy {
+    background: linear-gradient(90deg, #56ab2f 0%, #a8e063 100%);
+}
+
+.emotion-bar-fill.emotion-sad {
+    background: linear-gradient(90deg, #4776e6 0%, #8e54e9 100%);
+}
+
+.emotion-bar-fill.emotion-angry {
+    background: linear-gradient(90deg, #eb3349 0%, #f45c43 100%);
+}
+
+.emotion-bar-fill.emotion-neutral {
+    background: linear-gradient(90deg, #4ca1af 0%, #c4e0e5 100%);
+}
+
 .charts-container {
     display: grid;
     grid-template-columns: 1fr 1fr;
