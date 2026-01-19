@@ -15,6 +15,7 @@ const consoleOutput = document.getElementById('consoleOutput');
 const clearConsoleBtn = document.getElementById('clearConsoleBtn');
 const dropZone = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
+const fuzzyMatchToggle = document.getElementById('fuzzyMatchToggle');
 
 // State
 let isRecording = false;
@@ -23,6 +24,7 @@ let timerInterval = null;
 let websocket = null;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 5;
+let fuzzyMatchEnabled = true;
 
 // WAV Recording variables
 let audioContext = null;
@@ -139,6 +141,28 @@ function connectWebSocket() {
 // SERVER RESPONSE HANDLER
 // ============================================================================
 
+// ============================================================================
+// FUZZY MATCH TOGGLE
+// ============================================================================
+
+fuzzyMatchToggle.addEventListener('change', (e) => {
+    fuzzyMatchEnabled = e.target.checked;
+    const status = fuzzyMatchEnabled ? 'enabled' : 'disabled';
+    logToConsole(`🔍 Fuzzy matching ${status}`, 'info');
+    
+    // Send toggle state to server
+    if (websocket && websocket.readyState === WebSocket.OPEN) {
+        websocket.send(JSON.stringify({
+            type: 'fuzzy_match_toggle',
+            enabled: fuzzyMatchEnabled
+        }));
+    }
+});
+
+// ============================================================================
+// SERVER RESPONSE HANDLER
+// ============================================================================
+
 function handleServerResponse(data) {
     console.log('handleServerResponse called with:', data);
     
@@ -163,6 +187,15 @@ function handleServerResponse(data) {
     if (data.konkani) {
         konkaniText.textContent = data.konkani;
         logToConsole(`Konkani: ${data.konkani}`, 'success');
+        
+        // Show fuzzy match info if available
+        if (data.fuzzy_match) {
+            const matchInfo = `(Matched with ${data.fuzzy_match.similarity_score.toFixed(1)}% similarity)`;
+            logToConsole(`🔍 Fuzzy match: ${matchInfo}`, 'info');
+            if (data.konkani_transcribed && data.konkani_transcribed !== data.konkani) {
+                logToConsole(`Original: ${data.konkani_transcribed}`, 'info');
+            }
+        }
     }
 
     if (data.english) {

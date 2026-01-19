@@ -27,7 +27,7 @@ import numpy as np
 import threading
 import warnings
 from dataclasses import dataclass
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Tuple
 from collections import deque
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,6 +36,20 @@ from pathlib import Path
 import io
 import wave
 import uvicorn
+
+# Fuzzy matching library
+try:
+    from rapidfuzz import fuzz, process
+    FUZZY_AVAILABLE = True
+    print("✓ Using rapidfuzz for fuzzy matching")
+except ImportError:
+    try:
+        from fuzzywuzzy import fuzz, process
+        FUZZY_AVAILABLE = True
+        print("✓ Using fuzzywuzzy for fuzzy matching")
+    except ImportError:
+        FUZZY_AVAILABLE = False
+        print("⚠ No fuzzy matching library available. Install rapidfuzz or fuzzywuzzy.")
 
 warnings.filterwarnings('ignore')
 
@@ -182,6 +196,7 @@ class AudioBuffer:
         self._lock = threading.Lock()
         self.speech_detected = False
         self.silence_samples = 0
+        self.fuzzy_match_enabled = True  # Default to enabled
     
     def add_chunk(self, audio_chunk: np.ndarray):
         """Add audio chunk to buffer"""
@@ -216,6 +231,107 @@ class AudioBuffer:
         return energy > self.config.energy_threshold
 
 # ============================================================================
+# FUZZY MATCHER
+# ============================================================================
+
+class KonkaniFuzzyMatcher:
+    """Fuzzy matcher for Konkani sentences"""
+    
+    def __init__(self, sentences_file: str = "konkani_sentences.json"):
+        self.sentences: List[str] = []
+        self.sentences_file = sentences_file
+        self.enabled = FUZZY_AVAILABLE
+        self._lock = threading.Lock()
+        self.load_sentences()
+    
+    def load_sentences(self):
+        """Load reference sentences from JSON file"""
+        try:
+            sentences_path = Path(__file__).parent / self.sentences_file
+            if sentences_path.exists():
+                with open(sentences_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    self.sentences = data.get('sentences', [])
+                    print(f"✓ Loaded {len(self.sentences)} reference sentences for fuzzy matching")
+            else:
+                print(f"⚠ Reference file not found: {sentences_path}")
+                self.enabled = False
+        except Exception as e:
+            print(f"⚠ Error loading reference sentences: {e}")
+            self.enabled = False
+    
+    def find_best_match(self, transcribed_text: str, threshold: float = 60.0) -> Optional[Dict]:
+        """
+        Find the best matching sentence from the reference list
+        
+        Args:
+            transcribed_text: The text transcribed by Whisper
+            threshold: Minimum similarity score (0-100) to consider a match
+            
+        Returns:
+            Dictionary with match info or None if no good match found
+        """
+        if not self.enabled or not self.sentences or not transcribed_text:
+            return None
+        
+        try:
+            with self._lock:
+                # Get the best match using fuzzy matching
+                result = process.extractOne(
+                    transcribed_text,
+                    self.sentences,
+                    scorer=fuzz.ratio
+                )
+                
+                if result:
+                    matched_sentence, score, index = result
+                    
+                    if score >= threshold:
+                        return {
+                            "matched_sentence": matched_sentence,
+                            "similarity_score": score,
+                            "original_transcription": transcribed_text,
+                            "index": index
+                        }
+                    else:
+                        print(f"   ⚠ Best match score ({score:.1f}) below threshold ({threshold})")
+                        return None
+                
+        except Exception as e:
+            print(f"⚠ Fuzzy matching error: {e}")
+        
+        return None
+    
+    def get_top_matches(self, transcribed_text: str, limit: int = 3) -> List[Tuple[str, float]]:
+        """
+        Get top N matching sentences
+        
+        Args:
+            transcribed_text: The text transcribed by Whisper
+            limit: Number of top matches to return
+            
+        Returns:
+            List of tuples (sentence, score)
+        """
+        if not self.enabled or not self.sentences or not transcribed_text:
+            return []
+        
+        try:
+            with self._lock:
+                results = process.extract(
+                    transcribed_text,
+                    self.sentences,
+                    scorer=fuzz.ratio,
+                    limit=limit
+                )
+                
+                return [(match[0], match[1]) for match in results]
+                
+        except Exception as e:
+            print(f"⚠ Fuzzy matching error: {e}")
+            return []
+
+# ============================================================================
 # GLOBAL PIPELINE
 # ============================================================================
 
@@ -227,6 +343,7 @@ class GlobalPipeline:
         self.whisper_model = None
         self.translator = None
         self.emotion_detector = None
+        self.fuzzy_matcher = None
         self.initialized = False
         self._lock = threading.Lock()
     
@@ -276,6 +393,10 @@ class GlobalPipeline:
             self.config.emotion_model_source,
             self.config.emotion_model_savedir
         )
+        
+        # Fuzzy Matcher
+        print("\n[4/4] Loading fuzzy matcher...")
+        self.fuzzy_matcher = KonkaniFuzzyMatcher()
         
         self.initialized = True
         print("\n" + "=" * 70)
@@ -458,11 +579,12 @@ def parse_audio_from_blob(audio_data: bytes) -> Optional[np.ndarray]:
         print(f"⚠ Audio parsing error: {e}")
         return None
 
-def process_audio(audio_array: np.ndarray) -> Dict:
+def process_audio(audio_array: np.ndarray, fuzzy_match_enabled: bool = True) -> Dict:
     """Process audio through the pipeline"""
     try:
         print("\n" + "="*70)
         print(f"🎤 Processing {len(audio_array)/16000:.2f}s of audio...")
+        print(f"   Fuzzy matching: {'enabled' if fuzzy_match_enabled else 'disabled'}")
         
         # 1. Transcribe
         konkani_text = pipeline.transcribe_audio(audio_array)
@@ -473,16 +595,36 @@ def process_audio(audio_array: np.ndarray) -> Dict:
             return {
                 "konkani": "",
                 "english": "[No speech detected]",
-                "emotion": {"neutral": 25.0, "happy": 25.0, "sad": 25.0, "angry": 25.0}
+                "emotion": {"neutral": 25.0, "happy": 25.0, "sad": 25.0, "angry": 25.0},
+                "fuzzy_match": None
             }
         
-        print(f"✓ Konkani: {konkani_text}")
+        print(f"✓ Konkani (transcribed): {konkani_text}")
         
-        # 2. Translate
-        english_text = pipeline.translator.translate(konkani_text)
+        # 2. Fuzzy match with reference sentences (if enabled)
+        fuzzy_match = None
+        matched_konkani_text = konkani_text  # Default to transcribed text
+        
+        if fuzzy_match_enabled and pipeline.fuzzy_matcher and pipeline.fuzzy_matcher.enabled:
+            fuzzy_match = pipeline.fuzzy_matcher.find_best_match(konkani_text, threshold=60.0)
+            
+            if fuzzy_match:
+                matched_konkani_text = fuzzy_match["matched_sentence"]
+                print(f"✓ Fuzzy matched: {matched_konkani_text} (score: {fuzzy_match['similarity_score']:.1f}%)")
+                
+                # Get top 3 matches for reference
+                top_matches = pipeline.fuzzy_matcher.get_top_matches(konkani_text, limit=3)
+                fuzzy_match["top_matches"] = top_matches
+            else:
+                print("  ℹ No good fuzzy match found, using transcribed text")
+        elif not fuzzy_match_enabled:
+            print("  ℹ Fuzzy matching disabled by user")
+        
+        # 3. Translate (use matched sentence if available, otherwise use transcribed)
+        english_text = pipeline.translator.translate(matched_konkani_text)
         print(f"✓ English: {english_text}")
         
-        # 3. Detect emotion
+        # 4. Detect emotion
         emotion_scores = pipeline.emotion_detector.detect_from_array(audio_array, 16000)
         dominant = max(emotion_scores.items(), key=lambda x: x[1])[0]
         print(f"✓ Emotion: {dominant} ({emotion_scores[dominant]:.1f}%)")
@@ -490,9 +632,11 @@ def process_audio(audio_array: np.ndarray) -> Dict:
         print("="*70 + "\n")
         
         return {
-            "konkani": konkani_text,
+            "konkani": matched_konkani_text,  # Return matched sentence if available
+            "konkani_transcribed": konkani_text,  # Original transcription
             "english": english_text,
-            "emotion": emotion_scores
+            "emotion": emotion_scores,
+            "fuzzy_match": fuzzy_match  # Include match details
         }
         
     except Exception as e:
@@ -503,7 +647,8 @@ def process_audio(audio_array: np.ndarray) -> Dict:
         return {
             "konkani": "",
             "english": f"[Error: {type(e).__name__}]",
-            "emotion": {"neutral": 25.0, "happy": 25.0, "sad": 25.0, "angry": 25.0}
+            "emotion": {"neutral": 25.0, "happy": 25.0, "sad": 25.0, "angry": 25.0},
+            "fuzzy_match": None
         }
 
 # ============================================================================
@@ -540,7 +685,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     # This is a complete file/recording - process immediately
                     print(f"🎵 Complete audio detected ({audio_duration:.1f}s) - processing immediately...")
                     loop = asyncio.get_running_loop()
-                    result = await loop.run_in_executor(None, process_audio, audio_array)
+                    result = await loop.run_in_executor(None, process_audio, audio_array, audio_buffer.fuzzy_match_enabled)
                     await websocket.send_json(result)
                     
                     # Clear any buffered data
@@ -571,7 +716,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     if buffered_audio is not None:
                         # Process in thread pool
                         loop = asyncio.get_running_loop()
-                        result = await loop.run_in_executor(None, process_audio, buffered_audio)
+                        result = await loop.run_in_executor(None, process_audio, buffered_audio, audio_buffer.fuzzy_match_enabled)
                         
                         # Send results
                         await websocket.send_json(result)
@@ -588,6 +733,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 if msg_data.get("type") == "clear_buffer":
                     audio_buffer.clear()
                     await websocket.send_json({"status": "buffer_cleared"})
+                
+                elif msg_data.get("type") == "fuzzy_match_toggle":
+                    audio_buffer.fuzzy_match_enabled = msg_data.get("enabled", True)
+                    status = "enabled" if audio_buffer.fuzzy_match_enabled else "disabled"
+                    print(f"🔍 Fuzzy matching {status} for this connection")
+                    await websocket.send_json({"status": "fuzzy_match_updated", "enabled": audio_buffer.fuzzy_match_enabled})
             
     except WebSocketDisconnect:
         print("✗ Client disconnected")
