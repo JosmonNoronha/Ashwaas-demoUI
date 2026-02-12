@@ -130,7 +130,10 @@ class EmotionDetector:
                 savedir=savedir,
                 run_opts={"device": "cuda" if torch.cuda.is_available() else "cpu"}
             )
+            # IEMOCAP labels: neu (neutral), hap (happy), sad, ang (angry)
             self.emotions = ['neutral', 'happy', 'sad', 'angry']
+            # Map IEMOCAP output indices to readable labels
+            self.iemocap_labels = ['neu', 'hap', 'sad', 'ang']
             self.enabled = True
             print("✓ Emotion model loaded")
         except Exception as e:
@@ -161,16 +164,11 @@ class EmotionDetector:
                     resampler = torchaudio.transforms.Resample(sample_rate, 16000)
                     signal = resampler(signal)
                 
-                # Inference
+                # Inference using SpeechBrain's classify_batch method
                 with torch.no_grad():
-                    device = next(self.classifier.mods.wav2vec2.parameters()).device
-                    signal = signal.to(device)
-                    wav_lens = torch.ones(1, device=device)
-                    
-                    features = self.classifier.mods.wav2vec2(signal, wav_lens)
-                    pooled = self.classifier.mods.avg_pool(features, wav_lens)
-                    logits = self.classifier.mods.output_mlp(pooled)
-                    probs = torch.softmax(logits.squeeze(), dim=-1).cpu().numpy()
+                    # Use SpeechBrain's proper inference method
+                    out_prob, score, index, text_lab = self.classifier.classify_batch(signal)
+                    probs = out_prob.squeeze().cpu().numpy()
                     
                     if probs.ndim > 1:
                         probs = probs.flatten()

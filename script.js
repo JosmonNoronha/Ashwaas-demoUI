@@ -249,9 +249,13 @@ function updateEmotion(emotionScores) {
     logToConsole(`Emotion: ${dominantEmotion} (${maxScore.toFixed(1)}%)`, 'info');
 }
 
+// Store previous emotion scores for spike detection
+let previousEmotionScores = {};
+
 function updateEmotionBars(scores) {
     // Update each emotion bar
     const emotions = ['happy', 'sad', 'angry', 'neutral'];
+    const SPIKE_THRESHOLD = 10; // Threshold for detecting significant changes
     
     emotions.forEach(emotion => {
         const score = scores[emotion] || 0;
@@ -259,9 +263,24 @@ function updateEmotionBars(scores) {
         const valueElement = document.getElementById(`${emotion}Value`);
         
         if (barElement && valueElement) {
+            const previousScore = previousEmotionScores[emotion] || 0;
+            const scoreDifference = Math.abs(score - previousScore);
+            
+            // Add spike animation if change is significant
+            if (scoreDifference > SPIKE_THRESHOLD) {
+                barElement.classList.add('spike');
+                // Remove spike class after animation completes
+                setTimeout(() => {
+                    barElement.classList.remove('spike');
+                }, 600);
+            }
+            
             // Animate the bar
             barElement.style.width = `${score}%`;
             valueElement.textContent = `${score.toFixed(1)}%`;
+            
+            // Store current score for next comparison
+            previousEmotionScores[emotion] = score;
         }
     });
 }
